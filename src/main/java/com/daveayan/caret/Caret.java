@@ -3,21 +3,28 @@ package com.daveayan.caret;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang.StringUtils;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpSession;
 
 import com.daveayan.mirage.ReflectionUtils;
 import com.daveayan.rjson.Rjson;
-import com.daveayan.rjson.utils.RjsonUtil;
+import com.daveayan.transformers.Context;
+import com.daveayan.transformers.Transformer;
 
 public class Caret {
-	private Object objectUnderTest;
+	private Class classUnderTest;
 	private String methodUnderTest, outputFolder, folderInstanceId;
 	private long id;
 	private Set<String> mocks = new HashSet<String>();
@@ -28,11 +35,45 @@ public class Caret {
 	private String returnLine = "";
 	private String returnConversion = "";
 	private String assertion = "";
+	private Set<String> sessionAttributesToRecord = new HashSet<String>();
+	private Set<String> sessionAttributesToNotRecord = new HashSet<String>();
+	private Set<String> requestAttributesToRecord = new HashSet<String>();
+	private Set<String> requestAttributesToNotRecord = new HashSet<String>();
 
 	private int executionId = 0;
 
+	private boolean startRecording = false;
+
+	public void startRecording() {
+		startRecording = true;
+	}
+
+	public void pauseRecording() {
+		startRecording = false;
+	}
+
+	public Caret sessionAttributesToRecord(String... attributes) {
+		sessionAttributesToRecord.addAll(Arrays.asList(attributes));
+		return this;
+	}
+
+	public Caret sessionAttributesToNotRecord(String... attributes) {
+		sessionAttributesToNotRecord.addAll(Arrays.asList(attributes));
+		return this;
+	}
+
+	public Caret requestAttributesToRecord(String... attributes) {
+		requestAttributesToRecord.addAll(Arrays.asList(attributes));
+		return this;
+	}
+
+	public Caret requestAttributesToNotRecord(String... attributes) {
+		requestAttributesToNotRecord.addAll(Arrays.asList(attributes));
+		return this;
+	}
+
 	public String getTestScript() {
-		String test_name = objectUnderTest.getClass().getSimpleName() + "_" + methodUnderTest + "_Test_" + id + "()  throws IOException {";
+		String test_name = classUnderTest.getSimpleName() + "_" + methodUnderTest + "_Test_" + id + "()  throws IOException {";
 		String script = "\n@Test public void " + test_name;
 
 		for(String mock: mocks) {
@@ -48,7 +89,7 @@ public class Caret {
 		for(String lc: inputParams) {
 			script += lc;
 		}
-		script += "\n\t" + objectUnderTest.getClass().getSimpleName() + " objectUnderTest = new " + objectUnderTest.getClass().getSimpleName() + "();";
+		script += "\n\t" + classUnderTest.getSimpleName() + " objectUnderTest = new " + classUnderTest.getSimpleName() + "();";
 
 		script += "\n\t// Set the dependencies here ...";
 
@@ -77,6 +118,29 @@ public class Caret {
 		return script;
 	}
 
+	public void captureHttpSession(HttpSession session) {
+		Transformer t = Transformer.newInstance().with_a(new HttpSessionToMockHttpSessionTransformer());
+		Context context = Context.newInstance().put("attributes", sessionAttributesToRecord).and("exceptAttributes", sessionAttributesToNotRecord);
+		MockHttpSession newSession = (MockHttpSession) t.transform(session, MockHttpSession.class, context);
+		captureInputParameter(newSession, null, "");
+	}
+
+	public void captureHttpServletRequest(HttpServletRequest request) {
+		Transformer t = Transformer.newInstance().with_a(new HttpServletRequestToMockTransformer());
+		Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
+		MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, context);
+		captureInputParameter(newRequest, null, "");
+	}
+
+	public void captureHttpServletRequestNoAttributes(HttpServletRequest request) {
+		Transformer t = Transformer.newInstance().with_a(new HttpServletRequestToMockTransformer());
+		requestAttributesToRecord = new HashSet<String>();
+		requestAttributesToRecord.add("___NO_SUCH_REQUEST_ATTRIBUTE___");
+		Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
+		MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, context);
+		captureInputParameter(newRequest, null, "");
+	}
+
 	public void captureExpectedReturnObject(Object object) {
 		String locationToJsonCaptured = captureObject(object, Integer.toString(executionId));
 		String simpleName = object.getClass().getSimpleName();
@@ -92,21 +156,43 @@ public class Caret {
 	}
 
 	public Object executeAndCaptureForMock(Object targetObject, String methodName, Object... parameters) {
+		if(! startRecording) {
+			Object returnValue = ReflectionUtils.call_forcibly(targetObject, methodName, parameters);
+			return returnValue;
+		}
 		String mockName = captureAsMock(targetObject);
 		String inputParamStringForMock = "";
 		for(int i = 0; i < parameters.length ; i++) {
 			executionId ++;
-			Object p = parameters[i];
-			String mockVariableName = captureDomainObject(p, "mock");
+			Object transformedObject = parameters[i];
+			Object originalObject = null;
+			if(transformedObject instanceof HttpSession) {
+				originalObject = transformedObject;
+				Transformer t = Transformer.newInstance().with_a(new HttpSessionToMockHttpSessionTransformer());
+				Context context = Context.newInstance().put("attributes", sessionAttributesToRecord).and("exceptAttributes", sessionAttributesToNotRecord);
+				transformedObject = (MockHttpSession) t.transform((HttpSession) transformedObject, MockHttpSession.class, context);
+			}
+			if(transformedObject instanceof HttpServletRequest) {
+				originalObject = transformedObject;
+				Transformer t = Transformer.newInstance().with_a(new HttpServletRequestToMockTransformer());
+				Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
+				transformedObject = (MockHttpServletRequest) t.transform((HttpServletRequest) transformedObject, MockHttpServletRequest.class, context);
+			}
+			String mockVariableName = captureDomainObject(originalObject, transformedObject, "mock");
 			if(i != 0) inputParamStringForMock += ",";
 			inputParamStringForMock += mockVariableName;
 		}
 		executionId ++;
 		Object returnValue = ReflectionUtils.call_forcibly(targetObject, methodName, parameters);
-		String mockVariableName = captureDomainObject(returnValue, "mock");
+		if(returnValue != null) {
+			String mockVariableName = captureDomainObject(null, returnValue, "mock");
+			String mock = "when(" + mockName + "." + methodName + "(" + inputParamStringForMock + ")).thenReturn(" + mockVariableName + ");";
+			linesOfCode.add("\n\t" + mock + "\n");
+		} else {
+			String mock = "when(" + mockName + "." + methodName + "(" + inputParamStringForMock + "));";
+			linesOfCode.add("\n\t" + mock + "\n");
+		}
 
-		String mock = "when(" + mockName + "." + methodName + "(" + inputParamStringForMock + ")).thenReturn(" + mockVariableName + ");";
-		linesOfCode.add("\n\t" + mock + "\n");
 
 		return returnValue;
 	}
@@ -119,8 +205,18 @@ public class Caret {
 		return mockName;
 	}
 
-	public String captureInputParameter(Object objectToCapture) {
+	public void captureInputParameter(Object objectToCapture, Class typeOfParam, String parameterName) {
 		executionId ++;
+
+		if(objectToCapture == null) {
+			String simpleName = typeOfParam.getSimpleName();
+			String mockVariableName = "input" + parameterName + "_" + executionId;
+			String line = simpleName + " " + mockVariableName + " = null;";
+			linesOfCode.add("\n\t" + line);
+			methodCallParams.add(mockVariableName);
+			return;
+		}
+
 		Rjson rjson = getRjsonInstance();
 		String json = rjson.toJson(objectToCapture);
 
@@ -133,31 +229,49 @@ public class Caret {
 			e.printStackTrace();
 		}
 
-		String inputVariableName = captureDomainObject(objectToCapture, "input");
+		String inputVariableName = captureDomainObject(null, objectToCapture, "input");
 
 		methodCallParams.add(inputVariableName);
-
-		return fileToCreate.getAbsolutePath();
 	}
 
-	private String captureDomainObjectIgnoringRecorded(Object object, String prefix) {
-		String identity = getIdentity(object);
-		String locationToJsonCaptured = captureObject(object, Integer.toString(executionId));
-		String simpleName = object.getClass().getSimpleName();
-		String mockVariableName = prefix + simpleName + "_" + executionId;
-		String line = simpleName + " " + mockVariableName + " = (" + simpleName + ")  RjsonUtil.fileAsObject(\"" + locationToJsonCaptured + "\");";
-		linesOfCode.add("\n\t" + line);
-		recordedObjects.put(identity, mockVariableName);
-		return mockVariableName;
-	}
-
-	private String captureDomainObject(Object object, String prefix) {
-		String identity = getIdentity(object);
-		String recordedVariableName = recordedObjects.get(identity);
-		if(StringUtils.isNotBlank(recordedVariableName)) {
-			return recordedVariableName;
+	private String captureDomainObjectIgnoringRecorded(Object originalObject, Object transformedObject, String prefix) {
+		if(originalObject == null) {
+			String identity = getIdentity(transformedObject);
+			String locationToJsonCaptured = captureObject(transformedObject, Integer.toString(executionId));
+			String simpleName = transformedObject.getClass().getSimpleName();
+			String mockVariableName = prefix + simpleName + "_" + executionId;
+			String line = simpleName + " " + mockVariableName + " = (" + simpleName + ")  RjsonUtil.fileAsObject(\"" + locationToJsonCaptured + "\");";
+			linesOfCode.add("\n\t" + line);
+			recordedObjects.put(identity, mockVariableName);
+			return mockVariableName;
+		} else {
+			String identity = getIdentity(originalObject);
+			String locationToJsonCaptured = captureObject(transformedObject, Integer.toString(executionId));
+			String simpleName = transformedObject.getClass().getSimpleName();
+			String mockVariableName = prefix + simpleName + "_" + executionId;
+			String line = simpleName + " " + mockVariableName + " = (" + simpleName + ")  RjsonUtil.fileAsObject(\"" + locationToJsonCaptured + "\");";
+			linesOfCode.add("\n\t" + line);
+			recordedObjects.put(identity, mockVariableName);
+			return mockVariableName;
 		}
-		return captureDomainObjectIgnoringRecorded(object, prefix);
+	}
+
+	private String captureDomainObject(Object originalObject, Object transformedObject, String prefix) {
+		if(originalObject == null) {
+			String identity = getIdentity(transformedObject);
+			String recordedVariableName = recordedObjects.get(identity);
+			if(StringUtils.isNotBlank(recordedVariableName)) {
+				return recordedVariableName;
+			}
+			return captureDomainObjectIgnoringRecorded(originalObject, transformedObject, prefix);
+		} else {
+			String identity = getIdentity(originalObject);
+			String recordedVariableName = recordedObjects.get(identity);
+			if(StringUtils.isNotBlank(recordedVariableName)) {
+				return recordedVariableName;
+			}
+			return captureDomainObjectIgnoringRecorded(originalObject, transformedObject, prefix);
+		}
 	}
 
 	private String captureObject(Object objectToCapture, String id) {
@@ -182,23 +296,30 @@ public class Caret {
 		return identity;
 	}
 
-	private Rjson getRjsonInstance() {
-		Rjson rjson = RjsonUtil.completeSerializer().andRecordFinal().with(new ExcludeServletContext());
+	public Rjson getRjsonInstance() {
+		Rjson rjson = Rjson.newInstance().andRecordAllModifiers().andRecordFinal().with(new ExcludeServletContext()).with(new CachedDateTimeZoneTransformer());
 		return rjson;
 	}
 
-	public static Caret testing(Object objectUnderTest, String methodUnderTest, String outputFolder) {
-		Caret a = Caret.testing(objectUnderTest, methodUnderTest, outputFolder, System.currentTimeMillis());
+	public static Caret testing(Class classUnderTest, String methodUnderTest, String outputFolder) {
+		Caret a = Caret.testing(classUnderTest, methodUnderTest, outputFolder, System.currentTimeMillis());
 		return a;
 	}
 
-	public static Caret testing(Object objectUnderTest, String methodUnderTest, String outputFolder, long id) {
+	public static Caret testingPause(Class classUnderTest, String methodUnderTest, String outputFolder) {
+		Caret a = Caret.testing(classUnderTest, methodUnderTest, outputFolder, System.currentTimeMillis());
+		a.startRecording = false;
+		return a;
+	}
+
+	public static Caret testing(Class classUnderTest, String methodUnderTest, String outputFolder, long id) {
 		Caret a = new Caret();
-		a.objectUnderTest = objectUnderTest;
+		a.classUnderTest = classUnderTest;
 		a.methodUnderTest = methodUnderTest;
 		a.outputFolder = outputFolder;
 		a.id = id;
 		a.folderInstanceId = Long.toString(id);
+		a.startRecording = true;
 		return a;
 	}
 

@@ -9,7 +9,7 @@
 		<dependency>
 			<groupId>com.daveayan</groupId>
 			<artifactId>mirage</artifactId>
-			<version>1.8</version>
+			<version>1.9</version>
 		</dependency>
 		<dependency>
 			<groupId>junit</groupId>
@@ -31,7 +31,7 @@
 		<dependency>
 			<groupId>com.daveayan</groupId>
 			<artifactId>rjson</artifactId>
-			<version>1.7</version>
+			<version>1.8</version>
 		</dependency>
 		<dependency>
 			<groupId>org.mockito</groupId>
