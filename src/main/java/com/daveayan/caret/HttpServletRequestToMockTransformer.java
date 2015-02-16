@@ -14,7 +14,7 @@ import com.daveayan.transformers.Context;
 
 public class HttpServletRequestToMockTransformer implements CanTransform {
 
-	public boolean canTransform(Object from, Class<?> to, Context context) {
+	public boolean canTransform(Object from, Class<?> to, String fieldName, Context context) {
 		if(ReflectionUtils.classImplements(from.getClass(), HttpServletRequest.class)) {
 			if(ReflectionUtils.classIsOfType(to, MockHttpServletRequest.class)) {
 				return true;
@@ -23,7 +23,7 @@ public class HttpServletRequestToMockTransformer implements CanTransform {
 		return false;
 	}
 
-	public Object transform(Object from, Class<?> to, Context context) {
+	public Object transform(Object from, Class<?> to, String fieldName, Context context) {
 		MockHttpServletRequest outRequest = new MockHttpServletRequest();
 		HttpServletRequest inRequest = (HttpServletRequest) from;
 
@@ -61,6 +61,10 @@ public class HttpServletRequestToMockTransformer implements CanTransform {
 				outRequest.setParameter(key, value);
 			}
 		}
+
+		outRequest.setCharacterEncoding(inRequest.getCharacterEncoding());
+		outRequest.setContentType(inRequest.getContentType());
+		outRequest.setContextPath(inRequest.getContextPath());
 
 		return outRequest;
 	}

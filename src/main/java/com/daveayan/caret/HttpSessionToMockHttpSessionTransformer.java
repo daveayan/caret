@@ -15,7 +15,7 @@ import com.daveayan.transformers.Context;
 
 public class HttpSessionToMockHttpSessionTransformer implements CanTransform {
 
-	public boolean canTransform(Object from, Class<?> to, Context context) {
+	public boolean canTransform(Object from, Class<?> to, String fieldName, Context context) {
 		if(ReflectionUtils.classImplements(from.getClass(), HttpSession.class)) {
 			if(ReflectionUtils.classIsOfType(to, MockHttpSession.class)) {
 				return true;
@@ -24,7 +24,7 @@ public class HttpSessionToMockHttpSessionTransformer implements CanTransform {
 		return false;
 	}
 
-	public Object transform(Object from, Class<?> to, Context context) {
+	public Object transform(Object from, Class<?> to, String fieldName, Context context) {
 		HttpSession inSession = (HttpSession) from;
 		MockHttpSession outSession = new MockHttpSession();
 

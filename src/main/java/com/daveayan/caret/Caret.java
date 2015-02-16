@@ -118,17 +118,38 @@ public class Caret {
 		return script;
 	}
 
+	public void captureRequestAndSession(HttpServletRequest request, HttpSession session) {
+		if(request != null && session == null) {
+			Transformer t = Transformer.newInstance().with_a(new HttpServletRequestToMockTransformer());
+			requestAttributesToRecord = new HashSet<String>();
+			requestAttributesToRecord.add("___NO_SUCH_REQUEST_ATTRIBUTE___");
+			Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
+			MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, "", context);
+			MockHttpSession newSession = new MockHttpSession();
+			newRequest.setSession(newSession);
+			captureInputParameter(newRequest, null, "");
+			return;
+		} else if(request == null && session != null) {
+			Transformer t = Transformer.newInstance().with_a(new HttpSessionToMockHttpSessionTransformer());
+			Context context = Context.newInstance().put("attributes", sessionAttributesToRecord).and("exceptAttributes", sessionAttributesToNotRecord);
+			MockHttpSession newSession = (MockHttpSession) t.transform(session, MockHttpSession.class, "", context);
+			MockHttpServletRequest newRequest = new MockHttpServletRequest();
+			newRequest.setSession(newSession);
+			captureInputParameter(newRequest, null, "");
+		}
+	}
+
 	public void captureHttpSession(HttpSession session) {
 		Transformer t = Transformer.newInstance().with_a(new HttpSessionToMockHttpSessionTransformer());
 		Context context = Context.newInstance().put("attributes", sessionAttributesToRecord).and("exceptAttributes", sessionAttributesToNotRecord);
-		MockHttpSession newSession = (MockHttpSession) t.transform(session, MockHttpSession.class, context);
+		MockHttpSession newSession = (MockHttpSession) t.transform(session, MockHttpSession.class, "", context);
 		captureInputParameter(newSession, null, "");
 	}
 
 	public void captureHttpServletRequest(HttpServletRequest request) {
 		Transformer t = Transformer.newInstance().with_a(new HttpServletRequestToMockTransformer());
 		Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
-		MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, context);
+		MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, "", context);
 		captureInputParameter(newRequest, null, "");
 	}
 
@@ -137,7 +158,7 @@ public class Caret {
 		requestAttributesToRecord = new HashSet<String>();
 		requestAttributesToRecord.add("___NO_SUCH_REQUEST_ATTRIBUTE___");
 		Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
-		MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, context);
+		MockHttpServletRequest newRequest = (MockHttpServletRequest) t.transform(request, MockHttpServletRequest.class, "", context);
 		captureInputParameter(newRequest, null, "");
 	}
 
@@ -170,13 +191,13 @@ public class Caret {
 				originalObject = transformedObject;
 				Transformer t = Transformer.newInstance().with_a(new HttpSessionToMockHttpSessionTransformer());
 				Context context = Context.newInstance().put("attributes", sessionAttributesToRecord).and("exceptAttributes", sessionAttributesToNotRecord);
-				transformedObject = (MockHttpSession) t.transform((HttpSession) transformedObject, MockHttpSession.class, context);
+				transformedObject = (MockHttpSession) t.transform((HttpSession) transformedObject, MockHttpSession.class, "", context);
 			}
 			if(transformedObject instanceof HttpServletRequest) {
 				originalObject = transformedObject;
 				Transformer t = Transformer.newInstance().with_a(new HttpServletRequestToMockTransformer());
 				Context context = Context.newInstance().put("attributes", requestAttributesToRecord).and("exceptAttributes", requestAttributesToNotRecord);
-				transformedObject = (MockHttpServletRequest) t.transform((HttpServletRequest) transformedObject, MockHttpServletRequest.class, context);
+				transformedObject = (MockHttpServletRequest) t.transform((HttpServletRequest) transformedObject, MockHttpServletRequest.class, "", context);
 			}
 			String mockVariableName = captureDomainObject(originalObject, transformedObject, "mock");
 			if(i != 0) inputParamStringForMock += ",";
@@ -205,12 +226,12 @@ public class Caret {
 		return mockName;
 	}
 
-	public void captureInputParameter(Object objectToCapture, Class typeOfParam, String parameterName) {
+	public void captureInputParameter(Object objectToCapture, Class typeOfParamIfNull, String parameterNameIfNull) {
 		executionId ++;
 
 		if(objectToCapture == null) {
-			String simpleName = typeOfParam.getSimpleName();
-			String mockVariableName = "input" + parameterName + "_" + executionId;
+			String simpleName = typeOfParamIfNull.getSimpleName();
+			String mockVariableName = "input" + parameterNameIfNull + "_" + executionId;
 			String line = simpleName + " " + mockVariableName + " = null;";
 			linesOfCode.add("\n\t" + line);
 			methodCallParams.add(mockVariableName);
@@ -299,6 +320,14 @@ public class Caret {
 	public Rjson getRjsonInstance() {
 		Rjson rjson = Rjson.newInstance().andRecordAllModifiers().andRecordFinal().with(new ExcludeServletContext()).with(new CachedDateTimeZoneTransformer());
 		return rjson;
+	}
+
+	public static Object fileAsObject(String fileName) throws IOException {
+		return Rjson.newInstance().with(new ParameterJsonObjectAsMapTransformer()).toObject(fileAsString(fileName));
+	}
+
+	public static String fileAsString(String file) throws IOException {
+		return FileUtils.readFileToString(new File(file)).replaceAll("\\r\\n", "\n");
 	}
 
 	public static Caret testing(Class classUnderTest, String methodUnderTest, String outputFolder) {
